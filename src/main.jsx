@@ -144,6 +144,7 @@ function App() {
         <button className="search-go" onClick={() => loadTracks(query)}>Найти</button>
       </div>
 
+      <button className="search-go" style={{width:"100%",marginTop:10}} onClick={() => query.trim() ? window.open("https://vk.com/audio?q="+encodeURIComponent(query.trim()),"_blank") : alert("Введи название песни")}>Искать музыку во VK</button>
       {activeTab === "home" && <>
         <div className="chips">
           {["Все","Chill","Electronic","Jazz","Rock","Pop"].map((g,i)=><button key={g} className={i===0?"chip active":"chip"} onClick={() => {setQuery(""); loadTracks(i===0?"":g.toLowerCase());}}>{g}</button>)}
