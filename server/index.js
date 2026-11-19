@@ -33,7 +33,7 @@ app.get("/api/tracks", async (req, res) => {
     include: "licenses",
     order: search ? "relevance" : "popularity_month"
   });
-  if (search) params.set("namesearch", search);
+  if (search) params.set("search", search);
   if (tag) params.set("tags", tag);
 
   try {
