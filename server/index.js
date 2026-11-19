@@ -120,7 +120,7 @@ app.get("/api/tracks", async (req, res) => {
     const itunes = results[1].status === "fulfilled"
       ? results[1].value : [];
 
-    const tracks = [...itunes, ...jamendo];
+    const tracks = [...jamendo, ...itunes];
 
     if (!tracks.length && results.every(r => r.status === "rejected")) {
       throw new Error("Не удалось подключиться к музыкальным каталогам");
