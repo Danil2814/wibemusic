@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CLIENT_ID = process.env.JAMENDO_CLIENT_ID;
@@ -14,17 +15,17 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, provider: "Jamendo", configured: Boolean(CLIENT_ID) });
+  res.json({
+    ok: true,
+    provider: "Jamendo + iTunes",
+    jamendoConfigured: Boolean(CLIENT_ID),
+    itunesConfigured: true
+  });
 });
 
-app.get("/api/tracks", async (req, res) => {
-  if (!CLIENT_ID) {
-    return res.status(503).json({
-      error: "Добавьте JAMENDO_CLIENT_ID в .env. Получить ключ можно на devportal.jamendo.com"
-    });
-  }
-  const search = String(req.query.search || "").slice(0, 100);
-  const tag = String(req.query.tag || "").slice(0, 60);
+async function getJamendoTracks(search, tag) {
+  if (!CLIENT_ID) return [];
+
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     format: "json",
@@ -33,18 +34,26 @@ app.get("/api/tracks", async (req, res) => {
     include: "licenses",
     order: search ? "relevance" : "popularity_month"
   });
+
   if (search) params.set("search", search);
   if (tag) params.set("tags", tag);
 
-  try {
-    const response = await fetch(`https://api.jamendo.com/v3.0/tracks/?${params}`);
-    if (!response.ok) throw new Error(`Jamendo API returned ${response.status}`);
-    const payload = await response.json();
-    if (payload.headers?.status !== "success") {
-      throw new Error(payload.headers?.error_message || "Jamendo API error");
-    }
-    const tracks = (payload.results || []).filter(t => t.audio).map(t => ({
-      id: String(t.id),
+  const response = await fetch(
+    `https://api.jamendo.com/v3.0/tracks/?${params}`
+  );
+
+  if (!response.ok) throw new Error("Jamendo: " + response.status);
+
+  const payload = await response.json();
+
+  if (payload.headers?.status !== "success") {
+    throw new Error(payload.headers?.error_message || "Jamendo API error");
+  }
+
+  return (payload.results || [])
+    .filter(t => t.audio)
+    .map(t => ({
+      id: "jamendo-" + t.id,
       title: t.name,
       artist: t.artist_name,
       album: t.album_name || "Single",
@@ -53,12 +62,82 @@ app.get("/api/tracks", async (req, res) => {
       duration: Number(t.duration || 0),
       license: t.license_ccurl || "",
       audiodownloadAllowed: Boolean(t.audiodownload_allowed),
-      source: "Jamendo"
+      source: "Jamendo",
+      isPreview: false
     }));
+}
+
+async function getITunesTracks(search) {
+  if (!search) return [];
+
+  const params = new URLSearchParams({
+    term: search,
+    entity: "song",
+    media: "music",
+    limit: "30",
+    country: "US"
+  });
+
+  const response = await fetch(
+    `https://itunes.apple.com/search?${params}`
+  );
+
+  if (!response.ok) throw new Error("iTunes: " + response.status);
+
+  const payload = await response.json();
+
+  return (payload.results || [])
+    .filter(t => t.previewUrl && t.trackId)
+    .map(t => ({
+      id: "itunes-" + t.trackId,
+      title: t.trackName,
+      artist: t.artistName,
+      album: t.collectionName || "Single",
+      image: (t.artworkUrl100 || "").replace("100x100bb", "600x600bb"),
+      audio: t.previewUrl,
+      duration: Math.round((t.trackTimeMillis || 30000) / 1000),
+      license: "",
+      audiodownloadAllowed: false,
+      source: "iTunes",
+      isPreview: true,
+      trackUrl: t.trackViewUrl || ""
+    }));
+}
+
+app.get("/api/tracks", async (req, res) => {
+  const search = String(req.query.search || "").slice(0, 100);
+  const tag = String(req.query.tag || "").slice(0, 60);
+
+  try {
+    const results = await Promise.allSettled([
+      getJamendoTracks(search, tag),
+      getITunesTracks(search)
+    ]);
+
+    const jamendo = results[0].status === "fulfilled"
+      ? results[0].value : [];
+
+    const itunes = results[1].status === "fulfilled"
+      ? results[1].value : [];
+
+    const tracks = [...itunes, ...jamendo];
+
+    if (!tracks.length && results.every(r => r.status === "rejected")) {
+      throw new Error("Не удалось подключиться к музыкальным каталогам");
+    }
+
     res.set("Cache-Control", "public, max-age=120");
-    res.json({ tracks });
+    res.json({
+      tracks,
+      sources: {
+        jamendo: jamendo.length,
+        itunes: itunes.length
+      }
+    });
   } catch (error) {
-    res.status(502).json({ error: "Не удалось загрузить каталог: " + error.message });
+    res.status(502).json({
+      error: "Не удалось загрузить музыку: " + error.message
+    });
   }
 });
 
@@ -68,4 +147,6 @@ if (process.env.NODE_ENV === "production") {
   app.get("*", (_req, res) => res.sendFile(path.join(dist, "index.html")));
 }
 
-app.listen(PORT, () => console.log(`WibeMusic server: http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`WibeMusic server: http://localhost:${PORT}`);
+});
