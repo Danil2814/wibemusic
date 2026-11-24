@@ -17,8 +17,9 @@ app.use(express.json());
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    provider: "Jamendo + iTunes",
+    provider: "Jamendo + Audius + iTunes",
     jamendoConfigured: Boolean(CLIENT_ID),
+    audiusConfigured: true,
     itunesConfigured: true
   });
 });
@@ -104,6 +105,42 @@ async function getITunesTracks(search) {
     }));
 }
 
+
+async function getAudiusTracks(search) {
+  if (!search) return [];
+
+  const params = new URLSearchParams({
+    query: search,
+    limit: "30",
+    app_name: "WibeMusic"
+  });
+
+  const response = await fetch(
+    `https://api.audius.co/v1/tracks/search?${params}`
+  );
+
+  if (!response.ok) throw new Error("Audius: " + response.status);
+
+  const payload = await response.json();
+
+  return (payload.data || [])
+    .filter(t => t.id && t.is_streamable && !t.is_stream_gated)
+    .map(t => ({
+      id: "audius-" + t.id,
+      title: t.title,
+      artist: t.user?.name || "Audius",
+      album: "Audius",
+      image: t.artwork?.["480x480"] || t.artwork?.["150x150"] || "",
+      audio: `https://api.audius.co/v1/tracks/${encodeURIComponent(t.id)}/stream?app_name=WibeMusic`,
+      duration: Number(t.duration || 0),
+      license: t.license || "Не указана",
+      audiodownloadAllowed: false,
+      source: "Audius",
+      isPreview: false,
+      trackUrl: t.permalink ? "https://audius.co" + t.permalink : ""
+    }));
+}
+
 app.get("/api/tracks", async (req, res) => {
   const search = String(req.query.search || "").slice(0, 100);
   const tag = String(req.query.tag || "").slice(0, 60);
@@ -111,16 +148,20 @@ app.get("/api/tracks", async (req, res) => {
   try {
     const results = await Promise.allSettled([
       getJamendoTracks(search, tag),
+      getAudiusTracks(search),
       getITunesTracks(search)
     ]);
 
     const jamendo = results[0].status === "fulfilled"
       ? results[0].value : [];
 
-    const itunes = results[1].status === "fulfilled"
+    const audius = results[1].status === "fulfilled"
       ? results[1].value : [];
 
-    const tracks = [...jamendo, ...itunes];
+    const itunes = results[2].status === "fulfilled"
+      ? results[2].value : [];
+
+    const tracks = [...jamendo, ...audius, ...itunes];
 
     if (!tracks.length && results.every(r => r.status === "rejected")) {
       throw new Error("Не удалось подключиться к музыкальным каталогам");
@@ -131,6 +172,7 @@ app.get("/api/tracks", async (req, res) => {
       tracks,
       sources: {
         jamendo: jamendo.length,
+        audius: audius.length,
         itunes: itunes.length
       }
     });
